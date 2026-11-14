@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Suspicious Message Checker</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --high: #ef4444;
+      --medium: #f59e0b;
+      --low: #22c55e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 24px 16px;
+    }
+    .container { max-width: 780px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 1.75rem; }
+    p.subtitle { margin: 0 0 20px; color: var(--muted); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 120px;
+      background: #0b1220;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font: inherit;
+      resize: vertical;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    button {
+      background: #334155;
+      color: var(--text);
+      border: 1px solid #475569;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font: inherit;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #0f172a;
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+    button:hover { opacity: 0.92; }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 0.85rem;
+      margin-bottom: 8px;
+    }
+    .badge.HIGH { background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid var(--high); }
+    .badge.MEDIUM { background: rgba(245, 158, 11, 0.2); color: #fcd34d; border: 1px solid var(--medium); }
+    .badge.LOW { background: rgba(34, 197, 94, 0.2); color: #86efac; border: 1px solid var(--low); }
+    ul { margin: 8px 0 0; padding-left: 20px; }
+    li { margin-bottom: 6px; }
+    code {
+      background: #0b1220;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.88em;
+    }
+    .section-title { font-weight: 700; margin: 16px 0 6px; }
+    .note { font-size: 0.85rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🛡️ Suspicious Message Checker</h1>
+    <p class="subtitle">
+      Paste a suspicious message (fake support, watch-video job offer, or rapid-return investment) to spot red flags and see how to verify safely. Runs 100% locally in your browser.
+    </p>
+
+    <div class="card">
+      <textarea id="msgInput" placeholder="Paste the suspicious message here..."></textarea>
+      <div class="actions">
+        <button class="primary" onclick="runCheck()">Check Message</button>
+        <button onclick="loadSample('support')">Sample: Fake Support + OTP</button>
+        <button onclick="loadSample('job')">Sample: Watch-Video Job</button>
+        <button onclick="loadSample('invest')">Sample: Triple-Money Invest</button>
+        <button onclick="loadSample('benign')">Sample: Legitimate Notice</button>
+      </div>
+    </div>
+
+    <div id="resultCard" class="card" style="display:none;"></div>
+
+    <p class="note">
+      Note: GitHub Pages hosts this static browser tool. To run the Telegram bot itself (<code>bot.py</code>), deploy it as a Python worker on a host like Railway, Render, Docker, or a Linux VPS.
+    </p>
+  </div>
+
+  <script>
+    const SAMPLES = {
+      support: "Dear customer, this is Official Support. Unauthorized login detected! Your account will be suspended within 30 minutes. Reply with your 6-digit verification code or verify at https://support-verify-account.xyz/login",
+      job: "Part-time online job! Watch YouTube videos and earn $50 per day. No experience needed, instant payout. Message @hr_task_manager on Telegram.",
+      invest: "Invest $100, wait 3 hours, and get triple the value guaranteed!",
+      benign: "Hi Alex, we updated your support ticket #48219. Please log in through our official mobile app to view the reply."
+    };
+
+    const SHORTENERS = new Set(["bit.ly", "tinyurl.com", "t.co", "rb.gy", "cutt.ly", "is.gd", "shorturl.at", "ow.ly"]);
+    const RISKY_TLDS = new Set(["xyz", "top", "click", "support", "help", "tk", "ml", "ga", "cf", "gq", "icu", "vip", "buzz"]);
+    const FREE_EMAILS = new Set(["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "proton.me", "icloud.com"]);
+
+    function loadSample(key) {
+      document.getElementById("msgInput").value = SAMPLES[key];
+      runCheck();
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    function analyze(text) {
+      const warnings = [];
+      const addWarning = (category, title, explanation, severity, evidence = []) => {
+        warnings.push({ category, title, explanation, severity, evidence });
+      };
+
+      const rules = [
+        {
+          re: /\b(?:otp|one[- ]time[- ]pass(?:code|word)|2fa|two[- ]factor|verification code|security code|login code|password|passcode|pin\s*number|cvv|seed\s*phrase|recovery\s*phrase|private\s*key)\b/i,
+          cat: "Secrets & Codes",
+          title: "Asks for sensitive codes, passwords, or keys",
+          exp: "Real support teams NEVER ask for your password, 2FA/OTP code, PIN, or recovery phrase.",
+          sev: 3
+        },
+        {
+          re: /\b(?:anydesk|teamviewer|quicksupport|rustdesk|screen\s*share|share\s+your\s+screen|remote\s+(?:access|control))\b/i,
+          cat: "Remote Access",
+          title: "Requests remote access or screen sharing",
+          exp: "Scammers use remote-control apps to steal codes or take over your device.",
+          sev: 3
+        },
+        {
+          re: /\b(?:gift\s*card|itunes\s*card|google\s*play\s*card|verification\s+fee|unlock\s+fee|refundable\s+deposit|safe\s+wallet|(?:send|transfer|deposit)\s+(?:crypto|bitcoin|btc|eth|usdt|funds|money|fee))\b/i,
+          cat: "Payment Demand",
+          title: "Asks for unusual payments, fees, or transfers",
+          exp: "Legitimate support never asks for gift cards, unlock fees, or transfers to a 'safe wallet'.",
+          sev: 3
+        },
+        {
+          re: /\b(?:watch(?:ing)?\s+(?:\d+\s+)?(?:videos?|youtube|tiktok|reels?)|like\s+(?:\d+\s+)?(?:videos?|posts?)|simple\s+(?:online\s+)?tasks?)\b[\s\S]{0,60}\b(?:earn|get\s+(?:paid|money|cash|reward|\$?\d+)|make\s+money|salary|commission|\$\d+)\b/i,
+          cat: "Fake Job / Task Scam",
+          title: "Promises easy money for simple online tasks",
+          exp: "Task scams lure you with easy pay for watching videos or liking posts, then demand deposits to unlock 'VIP' tasks.",
+          sev: 3
+        },
+        {
+          re: /\b(?:double|triple|quadruple|multiply|2x|3x|4x|5x|10x)\s+(?:the\s+|your\s+|initial\s+|original\s+)?(?:money|investment|deposit|funds|crypto|value|amount|profit|returns?)\b|\b(?:invest|deposit|put\s+in|send)\b[\s\S]{0,80}\b(?:wait\s+(?:for\s+)?(?:a\s+few\s+|\d+\s+)?(?:hours?|hrs?|minutes?|days?)|(?:in|within)\s+\d+\s*(?:hours?|hrs?))\b[\s\S]{0,80}\b(?:get|receive|earn|back|triple|double|profit|return)\b|\b(?:guaranteed\s+(?:profit|returns?|roi)|(?:profit|returns?|value)\s+guaranteed|risk[- ]free\s+(?:investment|trading|profit))\b/i,
+          cat: "Investment / Doubling Scam",
+          title: "Promises guaranteed or rapid multiplied returns",
+          exp: "No legitimate investment can triple your money in a few hours or guarantee risk-free profits.",
+          sev: 3
+        },
+        {
+          re: /\b(?:urgent|immediately|within\s+\d+\s*(?:minutes?|hours?)|final\s+warning|unauthorized\s+(?:login|activity)|will be\s+(?:suspended|locked|frozen|deleted))\b/i,
+          cat: "Pressure Tactics",
+          title: "Creates artificial urgency or threats",
+          exp: "Urgency and account-suspension threats pressure you to act before verifying.",
+          sev: 2
+        },
+        {
+          re: /\b(?:official\s+support|customer\s+support|support\s+team|security\s+team|help\s*desk|dear\s+(?:customer|user)|hello\s+user)\b/i,
+          cat: "Impersonation",
+          title: "Claims to be official support or uses generic phrasing",
+          exp: "Anyone can set their display name to 'Official Support'. Verify through the official app.",
+          sev: 1
+        }
+      ];
+
+      for (const r of rules) {
+        const m = text.match(r.re);
+        if (m) addWarning(r.cat, r.title, r.exp, r.sev, [m[0].trim()]);
+      }
+
+      const urls = [...new Set(text.match(/(?:https?:\/\/|www\.)[^\s<>"]+/gi) || [])];
+      for (const raw of urls) {
+        try {
+          const u = new URL(raw.startsWith("http") ? raw : "http://" + raw);
+          const host = u.hostname.toLowerCase();
+          const tld = host.split(".").pop();
+          if (raw.toLowerCase().startsWith("http://")) {
+            addWarning("Suspicious Link", "Unencrypted HTTP link", `Link ${raw} uses http:// instead of https://.`, 2, [raw]);
+          }
+          if (SHORTENERS.has(host)) {
+            addWarning("Suspicious Link", "Shortened URL hides destination", `Shortened link (${host}) hides where it leads.`, 2, [raw]);
+          }
+          if (RISKY_TLDS.has(tld)) {
+            addWarning("Suspicious Link", "High-risk or unusual domain ending", `Domain ${host} ends in .${tld}, often abused in phishing.`, 2, [raw]);
+          }
+          if (host.split(".")[0].includes("-") && /(support|verify|security|login|account|billing)/.test(host)) {
+            addWarning("Suspicious Link", "Suspicious lookalike support domain", `Domain ${host} combines hyphens with support/verify words.`, 2, [raw]);
+          }
+        } catch {}
+      }
+
+      const emails = text.match(/\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/g) || [];
+      const freeEmails = emails.filter(e => FREE_EMAILS.has(e.split("@")[1].toLowerCase()));
+      if (freeEmails.length && warnings.some(w => w.cat === "Impersonation")) {
+        addWarning("Unofficial Channel", "Uses a personal email address", "Company support uses official company domains, not free personal email providers.", 2, freeEmails);
+      }
+
+      const score = Math.min(warnings.reduce((s, w) => s + w.severity * 2, 0), 10);
+      const risk = (warnings.some(w => w.severity >= 3) || score >= 6) ? "HIGH" : (score >= 3 || warnings.length >= 2) ? "MEDIUM" : "LOW";
+
+      const safeChecks = [
+        "Open the company's official app or type its official website address yourself — never use links from the message.",
+        "Check your account notifications or support tickets inside the official app.",
+        "Never pay a deposit, 'recharge', or share OTP/passwords/seed phrases.",
+        "Treat any promise to double/triple money in hours or pay easy cash for watching videos as a scam."
+      ];
+
+      return { risk, score, warnings, safeChecks };
+    }
+
+    function runCheck() {
+      const text = document.getElementById("msgInput").value.trim();
+      const card = document.getElementById("resultCard");
+      if (!text) {
+        card.style.display = "none";
+        return;
+      }
+      const res = analyze(text);
+      const label = res.risk === "HIGH" ? "🚨 HIGH RISK" : res.risk === "MEDIUM" ? "⚠️ MEDIUM RISK" : "🟢 LOW RISK";
+      const warningsHtml = res.warnings.length
+        ? `<ul>${res.warnings.map(w => `<li><strong>${escapeHtml(w.title)}</strong>: ${escapeHtml(w.explanation)}${w.evidence.length ? ` <code>${escapeHtml(w.evidence[0])}</code>` : ""}</li>`).join("")}</ul>`
+        : `<p>No common scam red flags were matched, but still verify unexpected messages via official channels.</p>`;
+
+      card.innerHTML = `
+        <div class="badge ${res.risk}">${label} (Score: ${res.score}/10)</div>
+        <div class="section-title">🔎 Warning Signs Found</div>
+        ${warningsHtml}
+        <div class="section-title">🛡️ How to Check Safely Before Acting</div>
+        <ul>${res.safeChecks.map(s => `<li>${escapeHtml(s)}</li>`).join("")}</ul>
+      `;
+      card.style.display = "block";
+    }
+  </script>
+</body>
+</html>
